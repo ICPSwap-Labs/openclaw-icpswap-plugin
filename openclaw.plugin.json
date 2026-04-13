@@ -1,0 +1,15 @@
+{
+  "id": "icpswap",
+  "name": "ICPSwap",
+  "version": "1.0.0",
+  "description": "Query ICPSwap pools and trading data via direct tool dispatch.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "contracts": {
+    "tools": ["icpswap_balance", "icpswap_quote", "icpswap_execute_swap", "icpswap_withdraw"]
+  },
+  "commandAliases": [{ "name": "icpswap", "kind": "runtime-slash" }]
+}

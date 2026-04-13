@@ -1,0 +1,17 @@
+{
+  "name": "@openclaw/icpswap",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "ICPSwap plugin for OpenClaw: query prices, execute swaps, check balances on the Internet Computer",
+  "openclaw": {
+    "extensions": ["./index.ts"],
+    "compat": {
+      "pluginApi": ">=2026.4.10",
+      "minGatewayVersion": "2026.4.10"
+    },
+    "build": {
+      "openclawVersion": "2026.4.10",
+      "pluginSdkVersion": "2026.4.10"
+    }
+  }
+}
