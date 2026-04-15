@@ -371,6 +371,27 @@ def fetch_pool_canister_token_addresses(dfx: str, pool_id: str) -> Optional[tupl
     return None
 
 
+def fetch_ledger_fee_live(dfx: str, ledger_id: str) -> Optional[int]:
+    """
+    Query the current transfer fee directly from the ledger canister via icrc1_fee().
+    Returns fee in base units, or None on failure.
+    Always use this instead of KNOWN_TOKEN_INFO when executing on-chain transactions —
+    pool contracts validate that the fee you pass matches their own cached value,
+    which must agree with the real ledger fee.
+    """
+    import re
+    result = subprocess.run(
+        [dfx, "canister", "call", "--network", "ic", "--query", ledger_id, "icrc1_fee", "()"],
+        capture_output=True, text=True, timeout=15,
+    )
+    if result.returncode != 0:
+        return None
+    m = re.search(r'\(\s*([\d_]+)\s*(?::\s*nat)?\s*\)', result.stdout)
+    if m:
+        return int(m.group(1).replace("_", ""))
+    return None
+
+
 def fetch_pool_balance(dfx: str, pool_id: str, principal: str) -> Optional[dict[str, int]]:
     """
     Query the user's unclaimed balance in the SwapPool internal account.

@@ -27,6 +27,7 @@ from swap_icpswap import (  # type: ignore[import]
     dfx_identity_principal,
     do_withdraw,
     fetch_balance,
+    fetch_ledger_fee_live,
     fetch_pool,
     fetch_pool_balance,
     fetch_pool_canister_token_addresses,
@@ -372,6 +373,26 @@ def add_liquidity(
     print(f"\n💧 Adding liquidity to {pool.get('pair', f'{sym0}/{sym1}')} pool...")
     print(f"   Pool: {pool_id}")
 
+    # Refresh transfer fees live from each ledger canister.
+    # Pool contracts validate that the fee in depositFrom exactly matches their
+    # cached ledger fee — using a stale hardcoded value causes "Wrong fee cache".
+    print(f"  📡 Verifying ledger fees...", end=" ", flush=True)
+    live0 = fetch_ledger_fee_live(dfx, ledger0)
+    live1 = fetch_ledger_fee_live(dfx, ledger1)
+    if live0 is not None and live0 != info0["transfer_fee"]:
+        print(f"\n  📋 {sym0} fee updated: {info0['transfer_fee']} → {live0}")
+        info0 = {**info0, "transfer_fee": live0}
+    if live1 is not None and live1 != info1["transfer_fee"]:
+        print(f"\n  📋 {sym1} fee updated: {info1['transfer_fee']} → {live1}")
+        info1 = {**info1, "transfer_fee": live1}
+    print("ok")
+
+    # Recompute base units and approve amounts with refreshed fees
+    amount0_base = to_base_units(amount0, info0["decimals"])
+    amount1_base = to_base_units(amount1, info1["decimals"])
+    amount0_min  = int(amount0_base * (1.0 - slippage / 100.0))
+    amount1_min  = int(amount1_base * (1.0 - slippage / 100.0))
+
     # Step 1 — icrc2_approve token0
     r = dfx_call(
         dfx, ledger0, "icrc2_approve",
@@ -401,7 +422,7 @@ def add_liquidity(
         f"Step 3/5 — depositFrom {sym0}",
     )
     if not r["ok"]:
-        print(f"❌ Deposit of {sym0} failed: {r['error']}")
+        _print_deposit_error(r["error"], sym0, ledger0, dfx)
         return 1
 
     # Step 4 — depositFrom token1
@@ -411,7 +432,7 @@ def add_liquidity(
         f"Step 4/5 — depositFrom {sym1}",
     )
     if not r["ok"]:
-        print(f"❌ Deposit of {sym1} failed: {r['error']}")
+        _print_deposit_error(r["error"], sym1, ledger1, dfx)
         print(f"\n⚠️  Attempting to recover already-deposited {sym0}...")
         _try_recover(dfx, pool_id, principal, ledger0, ledger1, sym0, sym1, info0, info1)
         return 1
@@ -627,6 +648,36 @@ def remove_liquidity(
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _print_deposit_error(error: str, sym: str, ledger_id: str, dfx: str) -> None:
+    """
+    Print a clear error for a failed depositFrom call.
+    Detects the 'Wrong fee cache' case and explains what happened.
+    """
+    if "Wrong fee cache" in error:
+        # Parse "expected: 10_000, received: 10"
+        m_exp = re.search(r'expected[:\s]+([\d_]+)', error, re.IGNORECASE)
+        m_got = re.search(r'received[:\s]+([\d_]+)', error, re.IGNORECASE)
+        pool_fee = int(m_exp.group(1).replace("_", "")) if m_exp else None
+        our_fee  = int(m_got.group(1).replace("_", "")) if m_got else None
+
+        # Query the real ledger fee to diagnose whose cache is wrong
+        live_fee = fetch_ledger_fee_live(dfx, ledger_id)
+
+        print(f"❌ Deposit of {sym} failed: pool fee cache mismatch")
+        if pool_fee is not None and our_fee is not None:
+            print(f"   Pool expected fee={pool_fee:,}, we sent fee={our_fee:,}")
+        if live_fee is not None and pool_fee is not None and live_fee != pool_fee:
+            print(f"   Ledger reports actual fee={live_fee:,} — the pool's cache is stale.")
+            print(f"   This is a temporary ICPSwap state issue. Please try again in a few minutes.")
+        elif live_fee is not None:
+            print(f"   Ledger actual fee={live_fee:,}. Pool cache may need a moment to sync.")
+            print(f"   Please try again shortly.")
+        else:
+            print(f"   Please try again later (the pool fee cache will refresh automatically).")
+    else:
+        print(f"❌ Deposit of {sym} failed: {error}")
+
 
 def _try_recover(
     dfx: str,
