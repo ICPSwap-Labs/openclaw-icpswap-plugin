@@ -1,15 +1,25 @@
 {
   "id": "icpswap",
   "name": "ICPSwap",
-  "version": "1.0.0",
-  "description": "Query ICPSwap pools and trading data via direct tool dispatch.",
+  "version": "1.1.0",
+  "description": "ICPSwap DEX: pool prices, swaps, liquidity, and transaction history via direct tool dispatch.",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
     "properties": {}
   },
   "contracts": {
-    "tools": ["icpswap_balance", "icpswap_quote", "icpswap_execute_swap", "icpswap_withdraw"]
+    "tools": [
+      "icpswap_balance",
+      "icpswap_quote",
+      "icpswap_execute_swap",
+      "icpswap_withdraw",
+      "icpswap_positions",
+      "icpswap_liquidity_preview",
+      "icpswap_add_liquidity",
+      "icpswap_remove_liquidity",
+      "icpswap_transactions"
+    ]
   },
   "commandAliases": [{ "name": "icpswap", "kind": "runtime-slash" }]
 }
