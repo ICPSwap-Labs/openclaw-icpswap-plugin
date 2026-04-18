@@ -168,10 +168,10 @@ def canonical_order(
 # ── Position queries ──────────────────────────────────────────────────────────
 
 def fetch_user_positions(dfx: str, pool_id: str, principal: str) -> list[dict[str, Any]]:
-    """Query the user's LP positions in a pool via getUserPositionsByPool."""
+    """Query the user's LP positions in a pool via getUserPositionsByPrincipal."""
     result = subprocess.run(
         [dfx, "canister", "call", "--network", "ic", "--query",
-         pool_id, "getUserPositionsByPool", f"(principal \"{principal}\")"],
+         pool_id, "getUserPositionsByPrincipal", f"(principal \"{principal}\")"],
         capture_output=True, text=True, timeout=20,
     )
     if result.returncode != 0:
@@ -565,12 +565,7 @@ def remove_liquidity(
     # Step 1 — decreaseLiquidity
     r = dfx_call(
         dfx, pool_id, "decreaseLiquidity",
-        f"(record {{ "
-        f"positionId = {pos_id} : nat; "
-        f"liquidity = \"{liq_to_remove}\"; "
-        f"amount0Min = 0 : nat; "
-        f"amount1Min = 0 : nat "
-        f"}})",
+        f"(record {{ positionId = {pos_id} : nat; liquidity = \"{liq_to_remove}\" }})",
         f"Step 1/3 — decreaseLiquidity (position #{pos_id})",
     )
     if not r["ok"]:
@@ -607,10 +602,18 @@ def remove_liquidity(
         print(f"   Tokens may still be in tokensOwed — retry or contact support.")
         return 1
 
-    # Step 2 — withdraw token0
+    # Refresh transfer fees live before withdraw (same as add_liquidity does)
+    live0 = fetch_ledger_fee_live(dfx, ledger0)
+    live1 = fetch_ledger_fee_live(dfx, ledger1)
+    if live0 is not None and live0 != info0["transfer_fee"]:
+        info0 = {**info0, "transfer_fee": live0}
+    if live1 is not None and live1 != info1["transfer_fee"]:
+        info1 = {**info1, "transfer_fee": live1}
+
+    # Step 2 — withdraw token0 (skip dust: balance must exceed transfer fee)
     step = 2
     any_failed = False
-    if bal0 > 0:
+    if bal0 > info0["transfer_fee"]:
         rr = dfx_call(
             dfx, pool_id, "withdraw",
             f"(record {{ token = \"{ledger0}\"; amount = {bal0}; fee = {info0['transfer_fee']} }})",
@@ -620,9 +623,11 @@ def remove_liquidity(
         if not rr["ok"]:
             print(f"❌ Withdraw {sym0} failed: {rr['error']}")
             any_failed = True
+    elif bal0 > 0:
+        print(f"   ⚠️  {sym0} dust ({bal0} base units) skipped — below transfer fee")
 
-    # Step 3 — withdraw token1
-    if bal1 > 0:
+    # Step 3 — withdraw token1 (skip dust)
+    if bal1 > info1["transfer_fee"]:
         rr = dfx_call(
             dfx, pool_id, "withdraw",
             f"(record {{ token = \"{ledger1}\"; amount = {bal1}; fee = {info1['transfer_fee']} }})",
@@ -631,6 +636,8 @@ def remove_liquidity(
         if not rr["ok"]:
             print(f"❌ Withdraw {sym1} failed: {rr['error']}")
             any_failed = True
+    elif bal1 > 0:
+        print(f"   ⚠️  {sym1} dust ({bal1} base units) skipped — below transfer fee")
 
     if any_failed:
         pair_str = pool.get("pair", f"{from_sym}/{to_sym}")

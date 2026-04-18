@@ -591,14 +591,18 @@ def _do_pool_withdrawals(
 ) -> bool:
     """Withdraw non-zero balance0/balance1. Returns True if all withdrawals succeeded."""
     any_failed = False
-    if bal0 > 0:
+    if bal0 > info0["transfer_fee"]:
         ok = do_withdraw(dfx, pool_id, ledger0, bal0, info0["transfer_fee"], sym0)
         if not ok:
             any_failed = True
-    if bal1 > 0:
+    elif bal0 > 0:
+        print(f"   ⚠️  {sym0} dust ({bal0} base units) skipped — below transfer fee")
+    if bal1 > info1["transfer_fee"]:
         ok = do_withdraw(dfx, pool_id, ledger1, bal1, info1["transfer_fee"], sym1)
         if not ok:
             any_failed = True
+    elif bal1 > 0:
+        print(f"   ⚠️  {sym1} dust ({bal1} base units) skipped — below transfer fee")
     return not any_failed
 
 
