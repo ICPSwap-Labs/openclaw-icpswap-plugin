@@ -6,6 +6,7 @@ const PLUGIN_DIR = path.dirname(fileURLToPath(import.meta.url));
 const QUERY_SCRIPT     = path.join(PLUGIN_DIR, 'scripts', 'query_icpswap.py');
 const SWAP_SCRIPT      = path.join(PLUGIN_DIR, 'scripts', 'swap_icpswap.py');
 const LIQUIDITY_SCRIPT = path.join(PLUGIN_DIR, 'scripts', 'liquidity_icpswap.py');
+const TXS_SCRIPT       = path.join(PLUGIN_DIR, 'scripts', 'txs_icpswap.py');
 
 // ─── Script runners ───────────────────────────────────────────────────────────
 
@@ -37,6 +38,19 @@ function runQueryScript(args: string[]): string {
     return `ICPSwap query failed: ${(result.stderr ?? '').trim() || `exit code ${result.status}`}`;
   }
   return (result.stdout ?? '').trim() || 'No results found.';
+}
+
+function runTxsScript(args: string[]): string {
+  const result = spawnSync('python3', [TXS_SCRIPT, ...args], {
+    cwd: PLUGIN_DIR,
+    encoding: 'utf8',
+    timeout: 30_000,
+  });
+  if (result.error) return `Error: ${result.error.message}`;
+  if (result.status !== 0) {
+    return `ICPSwap transactions query failed: ${(result.stderr ?? '').trim() || `exit code ${result.status}`}`;
+  }
+  return (result.stdout ?? '').trim() || 'No transactions found.';
 }
 
 function runLiquidityScript(args: string[], timeoutMs = 120_000): string {
@@ -110,6 +124,31 @@ function parsePair(raw: string, cmd: string): { args: string; error?: string } {
     return { args: '', error: `Usage: /icpswap ${cmd} FROM/TO  e.g. /icpswap ${cmd} ICP/ckUSDC` };
   }
   return { args: `--from ${parts[0].trim()} --to ${parts[1].trim()}` };
+}
+
+/**
+ * Normalise a token pair from a slash-command remainder string.
+ * Accepts "ICP/ckUSDC" or space-separated "ICP ckUSDC".
+ * Returns { pair: "ICP/ckUSDC", flags: [...remaining tokens] }
+ * or { error: string } when no pair tokens are present.
+ */
+function normalizeLiquidityPair(
+  rest: string,
+  cmd: string,
+): { pair: string; flags: string[] } | { error: string } {
+  const parts = rest.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) ?? [];
+  if (!parts.length) {
+    return { error: `Usage: /icpswap ${cmd} TOKEN0/TOKEN1  e.g. /icpswap ${cmd} ICP/ckUSDC` };
+  }
+  if (parts[0].includes('/')) {
+    return { pair: parts[0], flags: parts.slice(1) };
+  }
+  // Space-separated: second token must not be a flag
+  if (parts[1] && !parts[1].startsWith('-')) {
+    return { pair: `${parts[0]}/${parts[1]}`, flags: parts.slice(2) };
+  }
+  // Single token — pass as-is; Python will give a clear error if it's wrong
+  return { pair: parts[0], flags: parts.slice(1) };
 }
 
 /**
@@ -446,15 +485,74 @@ export default {
       { optional: true },
     );
 
+    /**
+     * Recent transactions query tool (read-only, no dfx).
+     */
+    api.registerTool({
+      name: 'icpswap_transactions',
+      description: 'List recent transactions (swaps, liquidity events, fee claims) on an ICPSwap pool. Use for "recent swaps", "latest trades", "transaction history", "pool activity" questions.',
+      parameters: {
+        type: 'object',
+        properties: {
+          from: {
+            type: 'string',
+            description: 'First token of the pair, e.g. ICP',
+          },
+          to: {
+            type: 'string',
+            description: 'Second token of the pair, e.g. ckUSDC',
+          },
+          limit: {
+            type: 'number',
+            description: 'Number of transactions to return (default 10, max recommended 50)',
+          },
+          action_type: {
+            type: 'string',
+            description: 'Filter by action type(s), comma-separated. Valid: Swap, AddLiquidity, DecreaseLiquidity, Claim',
+          },
+          principal: {
+            type: 'string',
+            description: 'Filter by a user principal ID (returns only that user\'s transactions)',
+          },
+        },
+        required: ['from', 'to'],
+      },
+      async execute(_id: string, params: {
+        from: string; to: string; limit?: number; action_type?: string; principal?: string;
+      }) {
+        const args = [`${params.from}/${params.to}`];
+        if (params.limit != null) args.push('--limit', String(params.limit));
+        if (params.action_type) args.push('--type', params.action_type);
+        if (params.principal) args.push('--principal', params.principal);
+        const result = runTxsScript(args);
+        return { content: [{ type: 'text', text: result }] };
+      },
+    });
+
     // ── Slash commands (bypass the model, execute directly) ───────────────────
 
     api.registerCommand({
       name: 'icpswap',
       description:
-        'ICPSwap: price | balance | swap | withdraw | positions | add-liquidity | remove-liquidity',
+        'ICPSwap: price | balance | swap | withdraw | positions | add-liquidity | remove-liquidity | txs',
       acceptsArgs: true,
       handler: async (ctx: any) => {
         const raw = (ctx.args ?? '').trim();
+
+        // txs ICP/ckUSDC [--limit N] [--type Swap] [--principal ID]
+        // (also accepts: txs ICP ckUSDC ...)
+        if (raw === 'txs' || raw.startsWith('txs ')) {
+          const rest = raw.slice('txs'.length).trim();
+          const tokens = rest.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) ?? [];
+          if (!tokens.length) {
+            return { text: 'Usage: /icpswap txs TOKEN0/TOKEN1 [--limit N] [--type Swap]' };
+          }
+          // Normalize "ICP ckUSDC" → "ICP/ckUSDC"
+          if (!tokens[0].includes('/') && tokens[1] && !tokens[1].startsWith('-')) {
+            tokens.splice(0, 2, `${tokens[0]}/${tokens[1]}`);
+          }
+          return { text: runTxsScript(tokens) };
+        }
 
         // balance ICP/ckUSDC
         if (raw === 'balance' || raw.startsWith('balance ')) {
@@ -475,9 +573,12 @@ export default {
           return { text: runSwapScript([...args.split(' '), '--withdraw-only']) };
         }
 
-        // positions ICP/ckUSDC
+        // positions ICP/ckUSDC  (also accepts: positions ICP ckUSDC)
         if (raw === 'positions' || raw.startsWith('positions ')) {
-          return { text: liquidityICPSwap(raw) };
+          const rest = raw.slice('positions'.length).trim();
+          const parsed = normalizeLiquidityPair(rest, 'positions');
+          if ('error' in parsed) return { text: parsed.error };
+          return { text: liquidityICPSwap(['positions', parsed.pair, ...parsed.flags].join(' ')) };
         }
 
         // add-liquidity ICP ckUSDC --amount0 10 [--amount1 125] [--yes]
@@ -487,9 +588,12 @@ export default {
         }
 
         // remove-liquidity ICP/ckUSDC [--position-id N] [--percent 50] [--yes]
+        // (also accepts: remove-liquidity ICP ckUSDC ...)
         if (raw === 'remove-liquidity' || raw.startsWith('remove-liquidity ')) {
           const rest = raw.slice('remove-liquidity'.length).trim();
-          return { text: liquidityICPSwap('remove ' + rest) };
+          const parsed = normalizeLiquidityPair(rest, 'remove-liquidity');
+          if ('error' in parsed) return { text: parsed.error };
+          return { text: liquidityICPSwap(['remove', parsed.pair, ...parsed.flags].join(' ')) };
         }
 
         // default: price query

@@ -10,6 +10,7 @@ An [OpenClaw](https://openclaw.ai) plugin for interacting with [ICPSwap](https:/
 - **Withdraw stuck funds** — recover residual balances left in the pool after a failed or partial swap
 - **Add liquidity** — create full-range or concentrated LP positions via `mint`
 - **Remove liquidity** — close or partially reduce LP positions and withdraw both tokens
+- **Recent transactions** — browse swaps, liquidity events and fee claims on any pool
 
 ## Requirements
 
@@ -65,6 +66,9 @@ To enable the optional tools that transfer real assets (swap execution and liqui
 | `/icpswap add-liquidity ICP ckUSDC --amount0 10 --amount1 125 --yes` | Add liquidity on-chain |
 | `/icpswap remove-liquidity ICP/ckUSDC --position-id 42 --yes` | Remove 100% of a position |
 | `/icpswap remove-liquidity ICP/ckUSDC --position-id 42 --percent 50 --yes` | Partially remove liquidity |
+| `/icpswap txs ICP/ckUSDC` | List latest transactions on a pool |
+| `/icpswap txs ICP/ckUSDC --limit 20 --type Swap` | Latest 20 swaps only (also: AddLiquidity, DecreaseLiquidity, Claim) |
+| `/icpswap txs ICP/ckUSDC --principal <PID>` | Show only a specific user's transactions on that pool |
 
 ## AI tools
 
@@ -80,6 +84,7 @@ When enabled, the plugin exposes tools the AI model can call directly in convers
 | `icpswap_liquidity_preview` | Preview adding liquidity (no execution) |
 | `icpswap_add_liquidity` | Add liquidity on-chain (optional — requires explicit user confirmation) |
 | `icpswap_remove_liquidity` | Remove liquidity from a position (optional — requires explicit user confirmation) |
+| `icpswap_transactions` | List recent transactions on a pool (swaps, liquidity events, fee claims) |
 
 ## Swap flow
 
@@ -109,6 +114,33 @@ By default, positions are created as **full-range** (equivalent to Uniswap v2 be
 3. `withdraw` (token1) — return token1 to wallet
 
 Use `--percent` to partially remove (e.g. `--percent 50` to halve a position).
+
+## Transactions query
+
+Read-only; no dfx or local identity needed. Data source: `https://api.icpswap.com/info/transaction/find`.
+
+Supported action types (via `--type`, comma-separated):
+
+| Type | Meaning |
+|------|---------|
+| `Swap` | Trade between token0 and token1 |
+| `AddLiquidity` | Deposit into an LP position |
+| `DecreaseLiquidity` | Burn liquidity from an LP position |
+| `Claim` | Collect accrued LP fees |
+
+Other filters: `--principal <PID>` (user), `--limit N` (default 10), `--page N` (pagination), `--begin <ms>` / `--end <ms>` (time range in epoch milliseconds), `--pool-id <canister>` (skip pair lookup). Results are newest-first.
+
+Example output:
+
+```
+📜 ICP/ckUSDC  ·  ICP $2.5563  ·  5 of 355,366 txs · latest, limit 5
+────────────────────────────────────────────────────────────────────────
+04-18 14:57  🔁 Swap       0.522574 ICP → 1.3185 ckUSDC  $1.3358  gqe6j-mm…t-rqe
+04-18 14:53  🔁 Swap       9.2476 ckUSDC → 3.6432 ICP     $9.369  neom5-2u…i-mae
+04-18 14:22  ➖ Remove LP  0.1 ICP + 0.253071 ckUSDC     $0.2577  rwrwc-k3…z-7qe
+04-18 14:21  ➕ Add LP     0.1 ICP + 0.253072 ckUSDC     $0.2577  rwrwc-k3…z-7qe
+04-18 13:48  🔁 Swap       601.21 ckUSDC → 236.94 ICP    $610.67  d3ynq-da…q-cai
+```
 
 ## Supported tokens (built-in)
 
